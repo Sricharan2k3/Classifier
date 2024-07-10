@@ -2,7 +2,7 @@ import streamlit as st
 from PIL import Image
 import requests
 from io import BytesIO
-from transformers import ViTImageProcessor, ViTForImageClassification, AutoModelForImageClassification
+from transformers import ViTImageProcessor, ViTForImageClassification, AutoModelForImageClassification, AutoModelForSeq2SeqLM, AutoTokenizer, AutoModelForSequenceClassification, DetrImageProcessor, DetrForObjectDetection
 import torch
 import torch.nn.functional as F
 
@@ -71,40 +71,142 @@ def predict_nsfw(image):
 
     return predicted_class_idx, prediction_probability, sorted_probs
 
-st.title("Image Classification App")
+def predict_gibberish(text):
+    model_name = "madhurjindal/autonlp-Gibberish-Detector-492513457"
+    model = AutoModelForSequenceClassification.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-model_choice = st.selectbox("Select model", ["Age Classifier", "NSFW Detector"])
+    inputs = tokenizer(text, return_tensors="pt")
+    outputs = model(**inputs)
+    probs = F.softmax(outputs.logits, dim=-1)
 
-upload_option = st.radio("Upload an image or enter an image URL", ("Upload", "URL"))
+    predicted_index = torch.argmax(probs, dim=1).item()
+    predicted_prob = probs[0][predicted_index].item()
+    labels = model.config.id2label
+    predicted_label = labels[predicted_index]
 
-image = None  # Initialize image variable
+    sorted_probs = sorted(
+        [(labels[i], probs[0][i].item()) for i in range(len(labels))],
+        key=lambda x: x[1],
+        reverse=True
+    )
 
-if upload_option == "Upload":
-    uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
-    if uploaded_file:
-        image = load_image(uploaded_file)
+    return predicted_label, predicted_prob, sorted_probs
+
+def get_emotion(text):
+    model_name = "mrm8488/t5-base-finetuned-emotion"
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    input_ids = tokenizer.encode(text + '</s>', return_tensors='pt')
+    output = model.generate(input_ids=input_ids, max_length=2)
+    dec = [tokenizer.decode(ids) for ids in output]
+    label = dec[0].replace('<pad> ', '').replace('</s>', '')  # Cleaning up the output
+    return label
+
+def detect_objects(image):
+    # Initialize the DETR model and processor
+    processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-101", revision="no_timm")
+    model = DetrForObjectDetection.from_pretrained("facebook/detr-resnet-101", revision="no_timm")
+
+    # Process the image and perform object detection
+    inputs = processor(images=image, return_tensors="pt")
+    outputs = model(**inputs)
+
+    # Retrieve detections with score > 0.9
+    target_sizes = torch.tensor([image.size[::-1]])
+    results = processor.post_process_object_detection(outputs, target_sizes=target_sizes, threshold=0.9)[0]
+
+    detected_objects = []
+    for score, label, box in zip(results["scores"], results["labels"], results["boxes"]):
+        box = [round(i, 2) for i in box.tolist()]
+        detected_objects.append({
+            "label": model.config.id2label[label.item()],
+            "score": round(score.item(), 3),
+            "box": box
+        })
+
+    return detected_objects
+
+st.title("Image and Text Classification App")
+
+model_choice = st.selectbox("Select model", ["Age Classifier", "NSFW Detector", "Gibberish Detector", "Emotion Detector", "Object Detector"])
+
+if model_choice == "Gibberish Detector" or model_choice == "Emotion Detector":
+    text_input = st.text_area("Enter text")
+    if text_input:
+        try:
+            if model_choice == "Gibberish Detector":
+                predicted_label, predicted_prob, sorted_probs = predict_gibberish(text_input)
+                st.write(f"Predicted Label: {predicted_label}")
+                st.write(f"Prediction Probability: {predicted_prob:.4f}")
+
+                st.write("Class Probabilities:")
+                for label, proba in sorted_probs:
+                    st.write(f"{label}: {proba:.4f}")
+            else:
+                emotion_label = get_emotion(text_input)
+                st.write(f"Predicted Emotion: {emotion_label}")
+
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
+elif model_choice == "Object Detector":
+    upload_option = st.radio("Upload an image or enter an image URL", ("Upload", "URL"))
+
+    image = None  # Initialize image variable
+
+    if upload_option == "Upload":
+        uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+        if uploaded_file:
+            image = load_image(uploaded_file)
+    else:
+        image_url = st.text_input("Enter image URL")
+        if image_url:
+            image = load_image(image_url)
+
+    if image:
+        try:
+            st.image(image, caption='Uploaded Image', use_column_width=True)
+
+            detected_objects = detect_objects(image)
+            for obj in detected_objects:
+                st.write(f"Detected {obj['label']} with confidence {obj['score']} at location {obj['box']}")
+
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
 else:
-    image_url = st.text_input("Enter image URL")
-    if image_url:
-        image = load_image(image_url)
+    upload_option = st.radio("Upload an image or enter an image URL", ("Upload", "URL"))
 
-if image:
-    try:
-        st.image(image, caption='Uploaded Image', use_column_width=True)
-        
-        if model_choice == "Age Classifier":
-            predicted_class, predicted_proba, sorted_probs = predict_age(image)
-            predicted_label = age_id2label[str(predicted_class)]
-        else:
-            predicted_class, predicted_proba, sorted_probs = predict_nsfw(image)
-            predicted_label = sorted_probs[0][0]
+    image = None  # Initialize image variable
 
-        st.write(f"Predicted Class: {predicted_label}")
-        st.write(f"Prediction Probability: {predicted_proba:.2%}")
+    if upload_option == "Upload":
+        uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+        if uploaded_file:
+            image = load_image(uploaded_file)
+    else:
+        image_url = st.text_input("Enter image URL")
+        if image_url:
+            image = load_image(image_url)
 
-        st.write("Class Probabilities:")
-        for label, proba in sorted_probs:
-            st.write(f"{label}: {proba:.2%}")
-    
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
+    if image:
+        try:
+            st.image(image, caption='Uploaded Image', use_column_width=True)
+
+            if model_choice == "Age Classifier":
+                predicted_class, predicted_proba, sorted_probs = predict_age(image)
+                predicted_label = age_id2label[str(predicted_class)]
+            elif model_choice == "NSFW Detector":
+                predicted_class, predicted_proba, sorted_probs = predict_nsfw(image)
+                predicted_label = sorted_probs[0][0]
+            else:
+                st.write("Select a valid model")
+
+            st.write(f"Predicted Class: {predicted_label}")
+            st.write(f"Prediction Probability: {predicted_proba:.2%}")
+
+            st.write("Class Probabilities:")
+            for label, proba in sorted_probs:
+                st.write(f"{label}: {proba:.2%}")
+
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
