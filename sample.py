@@ -180,7 +180,7 @@ else:
     image = None  # Initialize image variable
 
     if upload_option == "Upload":
-        uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+        uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png","webp"])
         if uploaded_file:
             image = load_image(uploaded_file)
     else:
