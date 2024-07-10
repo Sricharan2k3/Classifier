@@ -20,9 +20,12 @@ age_id2label = {
 }
 
 def load_image(image_source):
-    if image_source.startswith('http://') or image_source.startswith('https://'):
-        response = requests.get(image_source)
-        image = Image.open(BytesIO(response.content))
+    if isinstance(image_source, str):
+        if image_source.startswith('http://') or image_source.startswith('https://'):
+            response = requests.get(image_source)
+            image = Image.open(BytesIO(response.content))
+        else:
+            image = Image.open(image_source)
     else:
         image = Image.open(image_source)
     return image
@@ -72,11 +75,21 @@ st.title("Image Classification App")
 
 model_choice = st.selectbox("Select model", ["Age Classifier", "NSFW Detector"])
 
-image_url = st.text_input("Enter image URL")
+upload_option = st.radio("Upload an image or enter an image URL", ("Upload", "URL"))
 
-if image_url:
-    try:
+image = None  # Initialize image variable
+
+if upload_option == "Upload":
+    uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+    if uploaded_file:
+        image = load_image(uploaded_file)
+else:
+    image_url = st.text_input("Enter image URL")
+    if image_url:
         image = load_image(image_url)
+
+if image:
+    try:
         st.image(image, caption='Uploaded Image', use_column_width=True)
         
         if model_choice == "Age Classifier":
@@ -95,4 +108,3 @@ if image_url:
     
     except Exception as e:
         st.error(f"Error: {str(e)}")
-
