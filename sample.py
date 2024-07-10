@@ -23,11 +23,11 @@ def load_image(image_source):
     if isinstance(image_source, str):
         if image_source.startswith('http://') or image_source.startswith('https://'):
             response = requests.get(image_source)
-            image = Image.open(BytesIO(response.content))
+            image = Image.open(BytesIO(response.content)).convert("RGB")
         else:
-            image = Image.open(image_source)
+            image = Image.open(image_source).convert("RGB")
     else:
-        image = Image.open(image_source)
+        image = Image.open(image_source).convert("RGB")
     return image
 
 def predict_age(image):
