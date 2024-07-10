@@ -2,11 +2,12 @@ import streamlit as st
 from PIL import Image
 import requests
 from io import BytesIO
-from transformers import ViTImageProcessor, ViTForImageClassification
+from transformers import ViTImageProcessor, ViTForImageClassification, AutoModelForImageClassification
 import torch
+import torch.nn.functional as F
 
-# Define the id to label mapping
-id2label = {
+# Define the id to label mapping for the age classifier
+age_id2label = {
     "0": "0-2",
     "1": "3-9",
     "2": "10-19",
@@ -26,11 +27,11 @@ def load_image(image_source):
         image = Image.open(image_source)
     return image
 
-def predict_image(image):
+def predict_age(image):
     model = ViTForImageClassification.from_pretrained('nateraw/vit-age-classifier')
-    feature_extractor = ViTImageProcessor.from_pretrained('nateraw/vit-age-classifier')
+    processor = ViTImageProcessor.from_pretrained('nateraw/vit-age-classifier')
 
-    inputs = feature_extractor(images=image, return_tensors='pt')
+    inputs = processor(images=image, return_tensors='pt')
     output = model(**inputs)
 
     probs = torch.nn.functional.softmax(output.logits, dim=-1)
@@ -38,14 +39,38 @@ def predict_image(image):
     predicted_proba = probs[0, predicted_class].item()
 
     sorted_probs = sorted(
-        [(id2label[str(i)], probs[0, i].item()) for i in range(len(id2label))],
+        [(age_id2label[str(i)], probs[0, i].item()) for i in range(len(age_id2label))],
         key=lambda x: x[1],
         reverse=True
     )
 
     return predicted_class, predicted_proba, sorted_probs
 
-st.title("Age Classification App")
+def predict_nsfw(image):
+    processor = ViTImageProcessor.from_pretrained('AdamCodd/vit-base-nsfw-detector')
+    model = AutoModelForImageClassification.from_pretrained('AdamCodd/vit-base-nsfw-detector')
+
+    inputs = processor(images=image, return_tensors="pt")
+    outputs = model(**inputs)
+    logits = outputs.logits
+
+    predicted_class_idx = logits.argmax(-1).item()
+    predicted_class_label = model.config.id2label[predicted_class_idx]
+
+    probabilities = F.softmax(logits, dim=-1)
+    prediction_probability = probabilities[0][predicted_class_idx].item()
+
+    sorted_probs = sorted(
+        [(model.config.id2label[i], probabilities[0][i].item()) for i in range(len(model.config.id2label))],
+        key=lambda x: x[1],
+        reverse=True
+    )
+
+    return predicted_class_idx, prediction_probability, sorted_probs
+
+st.title("Image Classification App")
+
+model_choice = st.selectbox("Select model", ["Age Classifier", "NSFW Detector"])
 
 image_url = st.text_input("Enter image URL")
 
@@ -54,15 +79,20 @@ if image_url:
         image = load_image(image_url)
         st.image(image, caption='Uploaded Image', use_column_width=True)
         
-        predicted_class, predicted_proba, sorted_probs = predict_image(image)
-        predicted_label = id2label[str(predicted_class)]
+        if model_choice == "Age Classifier":
+            predicted_class, predicted_proba, sorted_probs = predict_age(image)
+            predicted_label = age_id2label[str(predicted_class)]
+        else:
+            predicted_class, predicted_proba, sorted_probs = predict_nsfw(image)
+            predicted_label = sorted_probs[0][0]
 
-        st.write(f"Predicted Age Group: {predicted_label}")
-        st.write(f"Confidence: {predicted_proba:.4f}")
+        st.write(f"Predicted Class: {predicted_label}")
+        st.write(f"Prediction Probability: {predicted_proba:.2%}")
 
         st.write("Class Probabilities:")
         for label, proba in sorted_probs:
-            st.write(f"{label}: {proba:.4f}")
+            st.write(f"{label}: {proba:.2%}")
     
     except Exception as e:
         st.error(f"Error: {str(e)}")
+
